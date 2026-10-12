@@ -22,7 +22,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -55,6 +55,7 @@ CAN_RxHeaderTypeDef rxHeader;
 uint8_t  txData[8];
 uint8_t  rxData[8];
 uint32_t txMailbox;
+volatile uint32_t rxCount = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -72,7 +73,14 @@ void MX_USB_HOST_Process(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+int _write(int file, char *ptr, int len)
+{
+  for (int i = 0; i < len; i++)
+  {
+    ITM_SendChar(ptr[i]);
+  }
+  return len;
+}
 /* USER CODE END 0 */
 
 /**
@@ -137,9 +145,10 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     txData[0]++;
-    HAL_CAN_AddTxMessage(&hcan1, &txHeader, txData, &txMailbox);
-    HAL_Delay(100);
-  }
+       HAL_CAN_AddTxMessage(&hcan1, &txHeader, txData, &txMailbox);
+       HAL_Delay(100);
+       printf("tx=%u rx=%lu\r\n", txData[0], rxCount);
+     }
   /* USER CODE END 3 */
 }
 
@@ -436,6 +445,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
   {
     if (rxHeader.StdId == 0x100)
     {
+      rxCount++;
       HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
     }
   }
