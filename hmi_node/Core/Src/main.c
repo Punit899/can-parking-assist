@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include "lcd1602.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -127,6 +128,9 @@ int main(void)
   txHeader.IDE   = CAN_ID_STD;
   txHeader.RTR   = CAN_RTR_DATA;
   txHeader.DLC   = CAN_DLC_PA_DISTANCE;
+  LCD_Init();
+  LCD_SetCursor(0, 0);
+  LCD_Print("Parking Assist");
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -147,6 +151,13 @@ int main(void)
 	    HAL_Delay(100);
 
 	    printf("RX dist=%u st=%u alive=%u\r\n", rxDistMm, rxStatus, rxAlive);
+
+	    char line[17];
+	    unsigned int d = rxDistMm;
+	    if (d > 9999) d = 9999;
+	    snprintf(line, sizeof(line), "Dist: %4u mm   ", d);
+	    LCD_SetCursor(1, 0);
+	    LCD_Print(line);
   }
   /* USER CODE END 3 */
 }
