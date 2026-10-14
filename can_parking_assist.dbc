@@ -1,0 +1,23 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: SensorNode HMINode
+
+BO_ 512 PA_Distance: 4 SensorNode
+ SG_ Distance : 0|16@1+ (1,0) [0|4300] "mm" HMINode
+ SG_ Status : 16|8@1+ (1,0) [0|1] "" HMINode
+ SG_ AliveCounter : 24|8@1+ (1,0) [0|255] "" HMINode
+
+CM_ BO_ 512 "Distance measured by the ultrasonic sensor, sent every 100 ms";
+CM_ SG_ 512 Distance "Distance to the nearest obstacle";
+CM_ SG_ 512 Status "Measurement validity";
+CM_ SG_ 512 AliveCounter "Increments by 1 with every frame, wraps at 255";
+
+BA_DEF_ BO_ "GenMsgCycleTime" INT 0 10000;
+BA_DEF_DEF_ "GenMsgCycleTime" 0;
+BA_ "GenMsgCycleTime" BO_ 512 100;
+
+VAL_ 512 Status 0 "Valid" 1 "NoEcho_OutOfRange";
