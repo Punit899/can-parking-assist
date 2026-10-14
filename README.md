@@ -8,8 +8,9 @@ over CAN at 500 kbit/s to an HMI node, which displays it and warns the driver.
 - [x] Sensor node: ultrasonic distance measurement (HC-SR04, TIM2 PWM trigger and input capture)
 - [x] CAN message `PA_Distance` (ID 0x200) with status and alive counter, specified in a DBC file
 - [x] HMI node: CAN bring-up in loopback, receives and decodes `PA_Distance`
+- [x] HMI node: own HD44780 driver for a 1602 LCD in 4-bit mode, shows the received distance
 - [ ] Two-node bus over SN65HVD230 transceivers
-- [ ] HMI node: 1602 LCD and buzzer warning
+- [ ] HMI node: buzzer and LED warning by distance zone
 - [ ] FreeRTOS application structure
 - [ ] Diagnostics (UDS over ISO-TP) and bus-off recovery
 
@@ -17,7 +18,7 @@ over CAN at 500 kbit/s to an HMI node, which displays it and warns the driver.
 | Node | Board | MCU | Role |
 |---|---|---|---|
 | Sensor node | STM32F407G-DISC1 | STM32F407VG (168 MHz) | Measures distance, sends `PA_Distance` every 100 ms |
-| HMI node | NUCLEO-F103RB | STM32F103RB (64 MHz) | Receives `PA_Distance`, shows and signals it |
+| HMI node | NUCLEO-F103RB | STM32F103RB (64 MHz) | Receives `PA_Distance`, shows it on a 1602 LCD |
 
 Using two different microcontroller families on one bus mirrors real vehicles, where ECUs come
 from different suppliers.
@@ -53,15 +54,22 @@ The full message set is defined in [`can_parking_assist.dbc`](can_parking_assist
 |---|---|---|
 | CAN RX | PA11 | CAN receive (internal pull-up) |
 | CAN TX | PA12 | CAN transmit |
-| LCD RS, E | PA0, PA1 | 1602 LCD control (4-bit mode) |
+| LCD RS, E | PA0, PA1 | 1602 LCD control (4-bit mode, RW tied to GND) |
 | LCD D4 to D7 | PA4, PB0, PC1, PC0 | 1602 LCD data |
 | Debug output | PB3 | SWO (printf via ITM) |
+
+LCD supply: 5 V from the Nucleo, contrast set with 1 kOhm from V0 to GND, backlight through 330 Ω.
+
+## LCD driver
+`hmi_node/Core/Src/lcd1602.c` implements the HD44780 initialisation sequence for 4-bit mode, with
+microsecond timing from the Cortex-M3 cycle counter (DWT). API: `LCD_Init`, `LCD_Clear`,
+`LCD_SetCursor`, `LCD_Print`.
 
 ## Repository structure
 | Path | Content |
 |---|---|
 | `sensor_node/` | STM32CubeIDE project for the sensor node |
-| `hmi_node/` | STM32CubeIDE project for the HMI node |
+| `hmi_node/` | STM32CubeIDE project for the HMI node, including the LCD driver |
 | `can_parking_assist.dbc` | CAN message specification |
 
 ## Tools
@@ -72,3 +80,8 @@ STM32CubeMX, STM32CubeIDE, STM32 HAL, Git
   with no transceiver attached, so the controller could not detect an idle bus and stayed in
   initialisation mode. Fixed by enabling the internal pull-up on PD0. The same pull-up was applied
   to PA11 on the HMI node from the start.
+- **Sensor reported "no echo" after rewiring:** the alive counter and status signal showed the CAN
+  path was fine while the measurement failed. The cause was an interrupted ground rail on the
+  breadboard; the sensor ground was moved to a direct connection to the board.
+- **Compiler warning on `snprintf` truncation:** the distance value is now limited to 4 digits
+  before formatting, so the LCD line always fits its 16 characters.
