@@ -32,7 +32,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define CAN_ID_PA_DISTANCE   0x200
+#define CAN_DLC_PA_DISTANCE  4
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -61,6 +62,10 @@ volatile uint32_t rxCount = 0;
 volatile uint32_t echoRise = 0;
 volatile uint32_t echoWidthUs = 0;
 volatile uint8_t  newMeasurement = 0;
+uint8_t aliveCounter = 0;
+volatile uint16_t rxDistMm = 0;
+volatile uint8_t  rxStatus = 0;
+volatile uint8_t  rxAlive = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -137,10 +142,10 @@ int main(void)
   if (HAL_CAN_Start(&hcan1) != HAL_OK) Error_Handler();
   if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK) Error_Handler();
 
-  txHeader.StdId = 0x100;
+  txHeader.StdId = CAN_ID_PA_DISTANCE;
   txHeader.IDE   = CAN_ID_STD;
   txHeader.RTR   = CAN_RTR_DATA;
-  txHeader.DLC   = 2;
+  txHeader.DLC   = CAN_DLC_PA_DISTANCE;
   HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
   /* USER CODE END 2 */
@@ -153,16 +158,20 @@ int main(void)
     MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
-    txData[0]++;
+    uint32_t width = echoWidthUs;
+        uint16_t distMm = (uint16_t)(width * 343 / 2000);
+        uint8_t  status = (width == 0 || width > 25000) ? 1 : 0;
+
+        txData[0] = distMm & 0xFF;
+        txData[1] = distMm >> 8;
+        txData[2] = status;
+        txData[3] = aliveCounter++;
         HAL_CAN_AddTxMessage(&hcan1, &txHeader, txData, &txMailbox);
+
         HAL_Delay(100);
 
-        if (newMeasurement)
-        {
-          newMeasurement = 0;
-          uint32_t distMm = echoWidthUs * 343 / 2000;
-          printf("echo=%lu us  dist=%lu mm\r\n", echoWidthUs, distMm);
-        }
+        printf("TX dist=%u st=%u alive=%u | RX dist=%u st=%u alive=%u\r\n",
+               distMm, status, txData[3], rxDistMm, rxStatus, rxAlive);
       }
   /* USER CODE END 3 */
 }
@@ -528,14 +537,17 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
-  if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK)
-  {
-    if (rxHeader.StdId == 0x100)
-    {
-      rxCount++;
-      HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
-    }
-  }
+	if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK)
+	{
+		if (rxHeader.StdId == CAN_ID_PA_DISTANCE && rxHeader.DLC == CAN_DLC_PA_DISTANCE)
+		{
+			rxDistMm = rxData[0] | (rxData[1] << 8);
+			rxStatus = rxData[2];
+			rxAlive  = rxData[3];
+			rxCount++;
+			HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
+		}
+	}
 }
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
