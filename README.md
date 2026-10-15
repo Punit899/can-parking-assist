@@ -41,7 +41,8 @@ The full message set is defined in [`can_parking_assist.dbc`](can_parking_assist
 | Sensor node | 42 MHz | 6 | 11 tq | 2 tq | 85.7 % |
 | HMI node | 32 MHz | 4 | 13 tq | 2 tq | 87.5 % |
 
-Both nodes run in normal mode with automatic retransmission enabled.
+Both nodes run in normal mode with automatic retransmission enabled. Only the sensor node sends
+`PA_Distance`; the HMI node only receives.
 
 ## Hardware and wiring
 
@@ -134,6 +135,9 @@ Problems met during development, how they were found, and how they were fixed.
   debug. Fix: ST-LINK serial number selected in each project's debug configuration.
 - **SWO console stayed empty:** ITM stimulus port 0 was not enabled, and the trace must be started
   before the program runs. Fix: tick port 0 in the trace configuration, start the trace, then resume.
+- **Reading registers in the debugger:** expressions such as `hcan.Instance->ESR` only show a value
+  while the program is paused ("Target not available" otherwise), and only for the board of the
+  active debug session.
 
 ### Sensor node
 - **LED did not blink after flashing:** the debugger halts at `main()` by default, so the program had
@@ -152,4 +156,22 @@ Problems met during development, how they were found, and how they were fixed.
 - **Display contrast without a potentiometer:** V0 connected through 1 kOhm to GND; leaving V0
   unconnected would give a blank display even with working code.
 
-###
+### Two-node bus
+- **Simulated sender removed before going on the real bus:** in loopback mode the HMI node had sent
+  itself a simulated `PA_Distance`. On a shared bus, two nodes sending the same ID with different
+  data would collide, so the HMI node was changed to receive only before connecting the boards.
+- **No communication on the real bus:** the HMI's LCD stayed at 0 and its receive LED never toggled.
+  Diagnosis in steps:
+  1. The sensor node's error status register showed an acknowledgement error (LEC = 3) with a rising
+     transmit error counter: frames left the sensor node correctly, but no node acknowledged them.
+     This ruled out the sensor node, its transceiver, and its PD0/PD1 wiring.
+  2. The HMI node's error status register (`0x080009F9`) showed a receive error counter of 8 while
+     its receive interrupt never fired: it saw activity on the bus but no valid frames. This pointed
+     to the HMI's transceiver connection.
+  3. Cause: the CAN RX/TX wires on the HMI node were on the wrong header pins. Fix: moved to PA11
+     (level with D12) and PA12 (level with D13) on CN10. After that, the sensor node's green LED
+     came on, the HMI's receive LED started blinking, and the LCD showed the live distance.
+- **Locating PA11/PA12 on the Nucleo:** they sit on the morpho header CN10 (outer row), not on the
+  Arduino sockets. Counting CN10 from its first pin, which is above the SCL/D15 label, gives pins 12
+  and 14; counting from the Arduino labels, they are level with D13 and D12. Mixing the two counting
+  methods is an easy source of off-by-one wiring errors.
