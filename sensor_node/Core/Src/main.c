@@ -170,8 +170,15 @@ int main(void)
 
         HAL_Delay(100);
 
-        printf("TX dist=%u st=%u alive=%u | RX dist=%u st=%u alive=%u\r\n",
-               distMm, status, txData[3], rxDistMm, rxStatus, rxAlive);
+        uint32_t esr = hcan1.Instance->ESR;
+           uint8_t  lec = (esr >> 4) & 0x7;     /* last error code */
+           uint8_t  tec = (esr >> 16) & 0xFF;   /* transmit error counter */
+
+           HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, (tec == 0) ? GPIO_PIN_SET : GPIO_PIN_RESET); /* green: bus OK */
+           HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, (tec > 0)  ? GPIO_PIN_SET : GPIO_PIN_RESET); /* red: transmit errors */
+           HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, (lec == 3) ? GPIO_PIN_SET : GPIO_PIN_RESET); /* blue: no acknowledgement */
+
+           printf("TX dist=%u alive=%u | TEC=%u LEC=%u\r\n", distMm, txData[3], tec, lec);
       }
   /* USER CODE END 3 */
 }
@@ -238,14 +245,14 @@ static void MX_CAN1_Init(void)
   /* USER CODE END CAN1_Init 1 */
   hcan1.Instance = CAN1;
   hcan1.Init.Prescaler = 6;
-  hcan1.Init.Mode = CAN_MODE_LOOPBACK;
+  hcan1.Init.Mode = CAN_MODE_NORMAL;
   hcan1.Init.SyncJumpWidth = CAN_SJW_1TQ;
   hcan1.Init.TimeSeg1 = CAN_BS1_11TQ;
   hcan1.Init.TimeSeg2 = CAN_BS2_2TQ;
   hcan1.Init.TimeTriggeredMode = DISABLE;
   hcan1.Init.AutoBusOff = DISABLE;
   hcan1.Init.AutoWakeUp = DISABLE;
-  hcan1.Init.AutoRetransmission = DISABLE;
+  hcan1.Init.AutoRetransmission = ENABLE;
   hcan1.Init.ReceiveFifoLocked = DISABLE;
   hcan1.Init.TransmitFifoPriority = DISABLE;
   if (HAL_CAN_Init(&hcan1) != HAL_OK)

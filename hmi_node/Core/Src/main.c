@@ -140,24 +140,16 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	    simDistMm = (simDistMm > 100) ? simDistMm - 50 : 2000;
-
-	    txData[0] = simDistMm & 0xFF;
-	    txData[1] = simDistMm >> 8;
-	    txData[2] = 0;
-	    txData[3] = aliveCounter++;
-	    HAL_CAN_AddTxMessage(&hcan, &txHeader, txData, &txMailbox);
-
 	    HAL_Delay(100);
 
-	    printf("RX dist=%u st=%u alive=%u\r\n", rxDistMm, rxStatus, rxAlive);
+	        printf("RX dist=%u st=%u alive=%u\r\n", rxDistMm, rxStatus, rxAlive);
 
-	    char line[17];
-	    unsigned int d = rxDistMm;
-	    if (d > 9999) d = 9999;
-	    snprintf(line, sizeof(line), "Dist: %4u mm   ", d);
-	    LCD_SetCursor(1, 0);
-	    LCD_Print(line);
+	        char line[17];
+	        unsigned int d = rxDistMm;
+	        if (d > 9999) d = 9999;
+	        snprintf(line, sizeof(line), "Dist: %4u mm   ", d);
+	        LCD_SetCursor(1, 0);
+	        LCD_Print(line);
   }
   /* USER CODE END 3 */
 }
@@ -217,14 +209,14 @@ static void MX_CAN_Init(void)
   /* USER CODE END CAN_Init 1 */
   hcan.Instance = CAN1;
   hcan.Init.Prescaler = 4;
-  hcan.Init.Mode = CAN_MODE_LOOPBACK;
+  hcan.Init.Mode = CAN_MODE_NORMAL;
   hcan.Init.SyncJumpWidth = CAN_SJW_1TQ;
   hcan.Init.TimeSeg1 = CAN_BS1_13TQ;
   hcan.Init.TimeSeg2 = CAN_BS2_2TQ;
   hcan.Init.TimeTriggeredMode = DISABLE;
   hcan.Init.AutoBusOff = DISABLE;
   hcan.Init.AutoWakeUp = DISABLE;
-  hcan.Init.AutoRetransmission = DISABLE;
+  hcan.Init.AutoRetransmission = ENABLE;
   hcan.Init.ReceiveFifoLocked = DISABLE;
   hcan.Init.TransmitFifoPriority = DISABLE;
   if (HAL_CAN_Init(&hcan) != HAL_OK)
