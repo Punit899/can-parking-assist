@@ -14,7 +14,7 @@ the driver through an LCD message and an LED blink pattern.
 - [x] Bus diagnostics on the sensor node: CAN error status register shown on LEDs and debug console
 - [x] HMI node: distance warning zones with LCD messages, LED blink patterns and CAN timeout detection
 - [x] CAN timing verified with a logic analyser: bit time, frame length, cycle time and bus load
-- [ ] Acoustic warning (buzzer) and hysteresis on the zone limits
+- [ ] Hysteresis on the zone limits
 - [ ] FreeRTOS application structure
 - [ ] Diagnostics (UDS over ISO-TP) and bus-off recovery
 
@@ -50,8 +50,8 @@ Design notes:
 - **Message timeout:** the receive interrupt stores the time of the last valid frame. If the sensor
   node stops sending (wire break, power loss, bus fault), the HMI node reports `Sensor lost!`
   within 300 ms instead of showing a stale distance.
-- **Output-independent logic:** the zone decision is separate from the output, so a buzzer can be
-  added later with one additional pin write.
+- **Output-independent logic:** the zone decision is separate from the output, so the LCD and the
+  LED only display the zone and further outputs need no change to the logic.
 
 ## CAN communication
 The full message set is defined in [`can_parking_assist.dbc`](can_parking_assist.dbc).
@@ -276,9 +276,9 @@ Problems met during development, how they were found, and how they were fixed.
 - **LCD without power after moving to a larger breadboard:** checked with a multimeter in DC voltage
   mode along the supply path (Nucleo 5V pin, + rail, LCD VDD, backlight anode) to find where the
   5 V stopped, and in continuity mode with power off to rule out a short between the rails.
-- **No buzzer available:** the KY-037 module in the sensor kit is a microphone (sound detector), not
-  a sound source. The warning output was therefore implemented on the on-board LED; the zone logic is
-  independent of the output device, so a buzzer can be added later.
+- **Warning output without a sound source:** the KY-037 module in the sensor kit is a microphone
+  (sound detector), not a sound source. The warning output was therefore implemented as an LCD
+  message and a blink pattern on the on-board LED.
 
 ### Two-node bus
 - **Simulated sender removed before going on the real bus:** in loopback mode the HMI node had sent
