@@ -1,18 +1,20 @@
 # Distributed Parking Assist System with CAN
 
 Two-ECU parking assist system: a sensor node measures the distance to an obstacle and sends it
-over a CAN bus at 500 kbit/s to an HMI node, which shows it on a display.
+over a CAN bus at 500 kbit/s to an HMI node, which classifies it into warning zones and informs
+the driver through an LCD message and an LED blink pattern.
 
 ## Status (work in progress)
 - [x] Sensor node: CAN bring-up in loopback at 500 kbit/s, interrupt-driven receive, SWO debug output
 - [x] Sensor node: ultrasonic distance measurement (HC-SR04, TIM2 PWM trigger and input capture)
 - [x] CAN message `PA_Distance` (ID 0x200) with status and alive counter, specified in a DBC file
 - [x] HMI node: CAN bring-up, receives and decodes `PA_Distance`
-- [x] HMI node: own HD44780 driver for a 1602 LCD in 4-bit mode, shows the received distance
+- [x] HMI node: own HD44780 driver for a 1602 LCD in 4-bit mode
 - [x] Two-node bus over SN65HVD230 transceivers: live distance from the sensor node shown on the HMI's LCD
 - [x] Bus diagnostics on the sensor node: CAN error status register shown on LEDs and debug console
+- [x] HMI node: distance warning zones with LCD messages, LED blink patterns and CAN timeout detection
 - [ ] Bus timing and load measured with a logic analyser
-- [ ] HMI node: buzzer and LED warning by distance zone, timeout when messages stop
+- [ ] Acoustic warning (buzzer) and hysteresis on the zone limits
 - [ ] FreeRTOS application structure
 - [ ] Diagnostics (UDS over ISO-TP) and bus-off recovery
 
@@ -20,10 +22,36 @@ over a CAN bus at 500 kbit/s to an HMI node, which shows it on a display.
 | Node | Board | MCU | Role |
 |---|---|---|---|
 | Sensor node | STM32F407G-DISC1 | STM32F407VG (168 MHz) | Measures distance, sends `PA_Distance` every 100 ms |
-| HMI node | NUCLEO-F103RB | STM32F103RB (64 MHz) | Receives `PA_Distance`, shows it on a 1602 LCD |
+| HMI node | NUCLEO-F103RB | STM32F103RB (64 MHz) | Receives `PA_Distance`, evaluates warning zones, drives LCD and LED |
 
 Using two different microcontroller families on one bus mirrors real vehicles, where ECUs come
 from different suppliers.
+
+## Warning zones (HMI node)
+The HMI node classifies every received distance into a zone. Limits, LED patterns and LCD texts
+are defined in tables in `hmi_node/Core/Src/main.c`, so changing a threshold is a one-line edit.
+
+| Zone | Condition | LCD line 1 | LED LD2 |
+|---|---|---|---|
+| Clear | distance above 500 mm | `Path clear` | off |
+| Caution | 301 to 500 mm | `Caution` | 100 ms on every 800 ms |
+| Warning | 151 to 300 mm | `Warning: slow` | 100 ms on every 300 ms |
+| Danger | 51 to 150 mm | `DANGER: brake!` | 60 ms on every 140 ms |
+| Stop | 50 mm or less | `STOP!` | on |
+| No echo | sensor status = 1 | `No echo/range` | off |
+| Sensor lost | no `PA_Distance` frame for 300 ms | `Sensor lost!` | 50 ms on every 2 s |
+
+LCD line 2 shows `Dist: xxxx mm`, or `Dist: -- mm` when no valid value is available.
+
+Design notes:
+- **Non-blocking main loop:** LED timing is derived from `HAL_GetTick()`, so the loop never waits
+  in `HAL_Delay`. The LCD is refreshed every 100 ms, and the message line is rewritten only when
+  the zone changes, which avoids flicker.
+- **Message timeout:** the receive interrupt stores the time of the last valid frame. If the sensor
+  node stops sending (wire break, power loss, bus fault), the HMI node reports `Sensor lost!`
+  within 300 ms instead of showing a stale distance.
+- **Output-independent logic:** the zone decision is separate from the output, so a buzzer can be
+  added later with one additional pin write.
 
 ## CAN communication
 The full message set is defined in [`can_parking_assist.dbc`](can_parking_assist.dbc).
@@ -44,7 +72,23 @@ The full message set is defined in [`can_parking_assist.dbc`](can_parking_assist
 Both nodes run in normal mode with automatic retransmission enabled. Only the sensor node sends
 `PA_Distance`; the HMI node only receives.
 
+## Ultrasonic sensor (HC-SR04)
+| Property | Value |
+|---|---|
+| Measuring range (datasheet) | 2 cm to 400 cm, most reliable about 5 cm to 2 m |
+| Measuring angle (datasheet) | 15° |
+| Frequency | 40 kHz |
+| Trigger | 10 µs pulse every 60 ms (TIM2_CH3 PWM) |
+| Echo evaluation | TIM2_CH2 input capture on both edges, 1 µs resolution |
+| Valid range in firmware | echo up to 25 ms (about 4.3 m); otherwise `Status = 1` |
+| Distance formula | mm = echo µs × 343 / 2000 (speed of sound at 20 °C) |
+
+Flat, hard targets give the most stable readings. Surfaces tilted by more than about 15 to 20°
+reflect the sound away, and soft materials absorb it; both result in `Status = 1`.
+
 ## Hardware and wiring
+A complete wiring reference with breadboard diagrams is available in
+[`docs/wiring_reference.pdf`](docs/wiring_reference.pdf).
 
 **Transceivers (one SN65HVD230 module per node, powered from 3.3 V)**
 | Module pin | Sensor node (STM32F407) | HMI node (STM32F103) |
@@ -81,7 +125,7 @@ The 5 V supplies of the two boards are never connected; each board is powered fr
 | CAN RX / TX | PA11 / PA12 | CAN (internal pull-up on RX) |
 | LCD RS, E | PA0, PA1 | 1602 LCD control (4-bit mode, RW tied to GND) |
 | LCD D4 to D7 | PA4, PB0, PC1, PC0 | 1602 LCD data |
-| Receive indicator | PA5 (LD2) | toggles with every received `PA_Distance` frame |
+| Warning LED | PA5 (LD2) | blink pattern per warning zone |
 | Debug output | PB3 | SWO (printf via ITM) |
 
 LCD supply: 5 V from the Nucleo, contrast set with 1 kOhm from V0 to GND (no potentiometer needed),
@@ -90,9 +134,12 @@ backlight through 330 Ω.
 ## Software components
 - **Distance measurement:** TIM2 runs at 1 µs per tick with a 60 ms period. Channel 3 generates the
   trigger pulse in hardware; channel 2 captures both edges of the echo, and the pulse width gives
-  the distance (mm = µs × 343 / 2000).
-- **CAN message handling:** the sensor node packs distance, status, and alive counter into
-  `PA_Distance`; the HMI node checks ID and length in the receive interrupt and decodes the signals.
+  the distance.
+- **CAN message handling:** the sensor node packs distance, status and alive counter into
+  `PA_Distance`; the HMI node checks ID and length in the receive interrupt, decodes the signals
+  and records the reception time.
+- **Warning logic:** `GetZone()` maps distance, status and message age to a zone;
+  `WarningLed_Update()` produces the LED pattern from a lookup table.
 - **LCD driver:** `hmi_node/Core/Src/lcd1602.c` implements the HD44780 initialisation sequence for
   4-bit mode, with microsecond timing from the Cortex-M3 cycle counter (DWT). API: `LCD_Init`,
   `LCD_Clear`, `LCD_SetCursor`, `LCD_Print`.
@@ -108,15 +155,24 @@ backlight through 330 Ω.
    (core clock 168 MHz for the sensor node, 64 MHz for the HMI node) and ITM port 0 to see the
    debug output.
 
+## Test procedure (warning zones)
+| Test | Expected result |
+|---|---|
+| HMI node powered, sensor node off | `Sensor lost!`, LD2 flashes every 2 s |
+| Flat object moved from 60 cm to 3 cm | messages step from `Path clear` to `STOP!`, LD2 blinks faster until steady on |
+| Sensor pointed into open space | `No echo/range`, LD2 off |
+| Sensor node unplugged during operation | `Sensor lost!` within 0.3 s |
+
 ## Repository structure
 | Path | Content |
 |---|---|
 | `sensor_node/` | STM32CubeIDE project for the sensor node |
-| `hmi_node/` | STM32CubeIDE project for the HMI node, including the LCD driver |
+| `hmi_node/` | STM32CubeIDE project for the HMI node, including the LCD driver and warning logic |
 | `can_parking_assist.dbc` | CAN message specification |
+| `docs/wiring_reference.pdf` | wiring diagrams for sensor, LCD, transceivers and bus |
 
 ## Tools
-STM32CubeMX, STM32CubeIDE, STM32 HAL, Git
+STM32CubeMX, STM32CubeIDE, STM32 HAL, Git, digital multimeter
 
 ## Debugging log
 Problems met during development, how they were found, and how they were fixed.
@@ -138,6 +194,9 @@ Problems met during development, how they were found, and how they were fixed.
 - **Reading registers in the debugger:** expressions such as `hcan.Instance->ESR` only show a value
   while the program is paused ("Target not available" otherwise), and only for the board of the
   active debug session.
+- **Duplicated `USER CODE` markers:** pasting a code block twice left two `USER CODE BEGIN 3` and
+  `USER CODE END 3` comments in `main.c`. It compiled, but CubeMX relies on these markers to keep
+  user code when regenerating, so the duplicates were removed.
 
 ### Sensor node
 - **LED did not blink after flashing:** the debugger halts at `main()` by default, so the program had
@@ -155,6 +214,12 @@ Problems met during development, how they were found, and how they were fixed.
   formatting, so the LCD line always fits its 16 characters.
 - **Display contrast without a potentiometer:** V0 connected through 1 kOhm to GND; leaving V0
   unconnected would give a blank display even with working code.
+- **LCD without power after moving to a larger breadboard:** checked with a multimeter in DC voltage
+  mode along the supply path (Nucleo 5V pin, + rail, LCD VDD, backlight anode) to find where the
+  5 V stopped, and in continuity mode with power off to rule out a short between the rails.
+- **No buzzer available:** the KY-037 module in the sensor kit is a microphone (sound detector), not
+  a sound source. The warning output was therefore implemented on the on-board LED; the zone logic is
+  independent of the output device, so a buzzer can be added later.
 
 ### Two-node bus
 - **Simulated sender removed before going on the real bus:** in loopback mode the HMI node had sent
@@ -170,7 +235,7 @@ Problems met during development, how they were found, and how they were fixed.
      to the HMI's transceiver connection.
   3. Cause: the CAN RX/TX wires on the HMI node were on the wrong header pins. Fix: moved to PA11
      (level with D12) and PA12 (level with D13) on CN10. After that, the sensor node's green LED
-     came on, the HMI's receive LED started blinking, and the LCD showed the live distance.
+     came on and the LCD showed the live distance.
 - **Locating PA11/PA12 on the Nucleo:** they sit on the morpho header CN10 (outer row), not on the
   Arduino sockets. Counting CN10 from its first pin, which is above the SCL/D15 label, gives pins 12
   and 14; counting from the Arduino labels, they are level with D13 and D12. Mixing the two counting
