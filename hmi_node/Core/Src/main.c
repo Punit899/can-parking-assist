@@ -27,13 +27,27 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef enum {
+  ZONE_CLEAR = 0,
+  ZONE_CAUTION,
+  ZONE_WARNING,
+  ZONE_DANGER,
+  ZONE_STOP,
+  ZONE_NO_ECHO,
+  ZONE_SENSOR_LOST,
+  ZONE_COUNT
+} Zone_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define CAN_ID_PA_DISTANCE   0x200
 #define CAN_DLC_PA_DISTANCE  4
+#define ZONE_STOP_MM      50
+#define ZONE_DANGER_MM    150
+#define ZONE_WARNING_MM   300
+#define ZONE_CAUTION_MM   500
+#define RX_TIMEOUT_MS     300
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -58,6 +72,9 @@ volatile uint16_t rxDistMm = 0;
 volatile uint8_t  rxStatus = 0;
 volatile uint8_t  rxAlive = 0;
 volatile uint32_t rxCount = 0;
+volatile uint32_t lastRxTick = 0;
+uint32_t lastLcdTick = 0;
+Zone_t   lastZone = ZONE_COUNT;   /* forces the first LCD update */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -78,6 +95,55 @@ int _write(int file, char *ptr, int len)
     ITM_SendChar(ptr[i]);
   }
   return len;
+}
+
+typedef struct { uint16_t onMs; uint16_t periodMs; } BlinkPattern_t;
+
+/* periodMs = 0 means constant: onMs != 0 is on, 0 is off */
+static const BlinkPattern_t blinkTable[ZONE_COUNT] = {
+  [ZONE_CLEAR]       = {   0,    0 },
+  [ZONE_CAUTION]     = { 100,  800 },
+  [ZONE_WARNING]     = { 100,  300 },
+  [ZONE_DANGER]      = {  60,  140 },
+  [ZONE_STOP]        = {   1,    0 },
+  [ZONE_NO_ECHO]     = {   0,    0 },
+  [ZONE_SENSOR_LOST] = {  50, 2000 },
+};
+
+static const char *zoneText[ZONE_COUNT] = {
+  [ZONE_CLEAR]       = "Path clear      ",
+  [ZONE_CAUTION]     = "Caution         ",
+  [ZONE_WARNING]     = "Warning: slow   ",
+  [ZONE_DANGER]      = "DANGER: brake!  ",
+  [ZONE_STOP]        = "STOP!           ",
+  [ZONE_NO_ECHO]     = "No echo/range   ",
+  [ZONE_SENSOR_LOST] = "Sensor lost!    ",
+};
+
+static Zone_t GetZone(uint32_t now)
+{
+  if ((now - lastRxTick) > RX_TIMEOUT_MS) return ZONE_SENSOR_LOST;
+  if (rxStatus != 0)                      return ZONE_NO_ECHO;
+
+  uint16_t d = rxDistMm;
+  if (d <= ZONE_STOP_MM)    return ZONE_STOP;
+  if (d <= ZONE_DANGER_MM)  return ZONE_DANGER;
+  if (d <= ZONE_WARNING_MM) return ZONE_WARNING;
+  if (d <= ZONE_CAUTION_MM) return ZONE_CAUTION;
+  return ZONE_CLEAR;
+}
+
+static void WarningLed_Update(Zone_t z, uint32_t now)
+{
+  const BlinkPattern_t *p = &blinkTable[z];
+  GPIO_PinState on;
+
+  if (p->periodMs == 0)
+    on = (p->onMs != 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+  else
+    on = ((now % p->periodMs) < p->onMs) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, on);
 }
 /* USER CODE END 0 */
 
@@ -131,6 +197,7 @@ int main(void)
   LCD_Init();
   LCD_SetCursor(0, 0);
   LCD_Print("Parking Assist");
+  HAL_Delay(1000);              /* short splash screen */
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -139,18 +206,41 @@ int main(void)
   {
     /* USER CODE END WHILE */
 
-    /* USER CODE BEGIN 3 */
-	    HAL_Delay(100);
+	    /* USER CODE BEGIN 3 */
+	    uint32_t now = HAL_GetTick();
+	    Zone_t zone = GetZone(now);
 
-	        printf("RX dist=%u st=%u alive=%u\r\n", rxDistMm, rxStatus, rxAlive);
+	    WarningLed_Update(zone, now);   /* runs every loop pass, no blocking delay */
 
-	        char line[17];
+	    if ((now - lastLcdTick) >= 100)
+	    {
+	      lastLcdTick = now;
+
+	      if (zone != lastZone)         /* redraw the message only when the zone changes */
+	      {
+	        LCD_SetCursor(0, 0);
+	        LCD_Print(zoneText[zone]);
+	        lastZone = zone;
+	      }
+
+	      char line[17];
+	      if (zone == ZONE_NO_ECHO || zone == ZONE_SENSOR_LOST)
+	      {
+	        snprintf(line, sizeof(line), "Dist:   -- mm   ");
+	      }
+	      else
+	      {
 	        unsigned int d = rxDistMm;
 	        if (d > 9999) d = 9999;
 	        snprintf(line, sizeof(line), "Dist: %4u mm   ", d);
-	        LCD_SetCursor(1, 0);
-	        LCD_Print(line);
-  }
+	      }
+	      LCD_SetCursor(1, 0);
+	      LCD_Print(line);
+
+	      printf("dist=%u st=%u alive=%u zone=%u\r\n",
+	             rxDistMm, rxStatus, rxAlive, (unsigned)zone);
+	    }
+	  }
   /* USER CODE END 3 */
 }
 
@@ -336,7 +426,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
       rxStatus = rxData[2];
       rxAlive  = rxData[3];
       rxCount++;
-      HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+      lastRxTick = HAL_GetTick();
     }
   }
 }
