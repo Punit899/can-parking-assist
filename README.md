@@ -13,7 +13,7 @@ the driver through an LCD message and an LED blink pattern.
 - [x] Two-node bus over SN65HVD230 transceivers: live distance from the sensor node shown on the HMI's LCD
 - [x] Bus diagnostics on the sensor node: CAN error status register shown on LEDs and debug console
 - [x] HMI node: distance warning zones with LCD messages, LED blink patterns and CAN timeout detection
-- [ ] Bus timing and load measured with a logic analyser
+- [x] CAN timing verified with a logic analyser: bit time, frame length, cycle time and bus load
 - [ ] Acoustic warning (buzzer) and hysteresis on the zone limits
 - [ ] FreeRTOS application structure
 - [ ] Diagnostics (UDS over ISO-TP) and bus-off recovery
@@ -163,6 +163,62 @@ backlight through 330 Ω.
 | Sensor pointed into open space | `No echo/range`, LD2 off |
 | Sensor node unplugged during operation | `Sensor lost!` within 0.3 s |
 
+## Measurements (logic analyser)
+The bus was checked with a 24 MHz 8-channel logic analyser (fx2lafw driver) in PulseView with the
+CAN protocol decoder (500 kbit/s, sample point 87.5 %).
+
+**Setup**
+| Analyser channel | Connected to | Signal |
+|---|---|---|
+| D0 | PD0 (sensor node) | CAN RX: everything on the bus, as seen through the transceiver |
+| D1 | PD1 (sensor node) | CAN TX: only what the sensor node itself sends |
+| GND | GND (sensor node) | common reference |
+
+Sample rate 4 MHz (8 samples per bit, 250 ns resolution), 5 M samples, which gives a 1.25 s capture
+with 12 consecutive frames.
+
+**Results**
+| Quantity | Expected | Measured |
+|---|---|---|
+| Bit time | 2 µs (500 kbit/s) | 2 µs |
+| Frame length (4 data bytes) | 76 bits + 5 stuff bits = 81 bits = 162 µs | approx. 160 µs |
+| Cycle time | 100 ms | 101.0 ms (10 periods = 1009.98 ms between cursors) |
+| Frame rate | 10 Hz | 9.9 Hz |
+| Bus load | well below 30 % | approx. 0.16 % (0.162 ms / 101 ms) |
+| Transceiver loop delay (TX to RX) | below 1 µs | 250 ns or less (one sample) |
+| Error frames | none | none |
+
+**Decoded frame (example)**
+| Field | Value | Meaning |
+|---|---|---|
+| Identifier | 0x200 (512) | `PA_Distance` |
+| DLC | 4 | 4 data bytes |
+| DB0, DB1 | 0x17, 0x03 | Distance = 0x0317 = 791 mm (little-endian) |
+| DB2 | 0x00 | Status = valid |
+| DB3 | 0xA5 | AliveCounter = 165 |
+| CRC-15 | 0x6F77 | decoded without CRC error |
+| ACK slot | dominant on D0, recessive on D1 | the HMI node acknowledged the frame |
+
+**Interpretation**
+- The measured bit time matches the configured prescaler and time segments on both nodes, which
+  confirms that the clock trees and bit timing are set up correctly. Every frame was acknowledged,
+  the CRC was valid and no error frames occurred.
+- The ACK proof comes from comparing both channels: in the ACK slot the sensor node transmits
+  recessive (D1 high), but the bus is dominant (D0 low), so another node must have driven it.
+- The cycle time is 101 ms instead of 100 ms because `HAL_Delay(100)` waits one extra tick to
+  guarantee the minimum delay, plus the run time of the loop itself.
+- The decoder marks the stuff bits that the CAN controller inserts after five equal bits. They
+  explain why the frame is longer than the 76-bit minimum.
+- At 0.16 % bus load the design has large headroom: roughly 300 more frames of this size per
+  100 ms would still stay below 50 % load, leaving room for more sensor nodes and UDS diagnostics.
+
+![Decoded CAN frame in PulseView](docs/can_frame_pulseview.png)
+
+![Cycle time measured over 10 periods](docs/can_period_pulseview.png)
+
+The raw capture is stored in [`docs/can_capture.sr`](docs/can_capture.sr) and can be opened in
+PulseView.
+
 ## Repository structure
 | Path | Content |
 |---|---|
@@ -170,9 +226,12 @@ backlight through 330 Ω.
 | `hmi_node/` | STM32CubeIDE project for the HMI node, including the LCD driver and warning logic |
 | `can_parking_assist.dbc` | CAN message specification |
 | `docs/wiring_reference.pdf` | wiring diagrams for sensor, LCD, transceivers and bus |
+| `docs/can_frame_pulseview.png` | logic analyser screenshot of one decoded `PA_Distance` frame |
+| `docs/can_period_pulseview.png` | logic analyser screenshot of the cycle time measurement |
+| `docs/can_capture.sr` | raw logic analyser capture (PulseView / sigrok format) |
 
 ## Tools
-STM32CubeMX, STM32CubeIDE, STM32 HAL, Git, digital multimeter
+STM32CubeMX, STM32CubeIDE, STM32 HAL, Git, digital multimeter, logic analyser with PulseView (sigrok)
 
 ## Debugging log
 Problems met during development, how they were found, and how they were fixed.
@@ -240,3 +299,16 @@ Problems met during development, how they were found, and how they were fixed.
   Arduino sockets. Counting CN10 from its first pin, which is above the SCL/D15 label, gives pins 12
   and 14; counting from the Arduino labels, they are level with D13 and D12. Mixing the two counting
   methods is an easy source of off-by-one wiring errors.
+
+### Logic analyser
+- **Analyser not recognised by PulseView:** the low-cost 24 MHz analyser needs the generic fx2lafw
+  driver. Fix: WinUSB driver installed for the device with Zadig. The first installation hung
+  because Windows had a restart pending; after restarting, the installation succeeded and PulseView
+  detected the device.
+- **Choosing the probe points:** both channels were placed on the sensor node's MCU side of the
+  transceiver (PD0 and PD1) at 3.3 V logic level, not on CANH/CANL. The analyser only measures
+  single-ended logic signals, and comparing TX with RX on one node shows both the transceiver delay
+  and which node drives the ACK bit.
+- **Capture long enough for the cycle time:** to measure the period, the capture must contain at
+  least two frames 100 ms apart. 5 M samples at 4 MHz (1.25 s) captured 12 frames, and measuring
+  across 10 periods instead of one averages out the jitter of the main loop.
